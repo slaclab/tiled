@@ -832,7 +832,7 @@ class CatalogNodeAdapter:
                 # Notify subscribers of the *parent* node about the new child.
                 sequence = await self.context.streaming_cache.incr_seq(self.node.id)
                 metadata = {
-                    "type": "container-child-created",
+                    "type": EventType.container_child_created,
                     "sequence": sequence,
                     "timestamp": datetime.now().isoformat(),
                     "key": key,
@@ -1171,9 +1171,9 @@ class CatalogNodeAdapter:
                     status_code=HTTP_404_NOT_FOUND,
                     detail=f"No revision {number} for node {self.node.id}",
                 )
-            assert (
-                result.rowcount == 1
-            ), f"Deletion would affect {result.rowcount} rows; rolling back"
+            assert result.rowcount == 1, (
+                f"Deletion would affect {result.rowcount} rows; rolling back"
+            )
             await db.commit()
 
     async def replace_metadata(
@@ -1223,7 +1223,7 @@ class CatalogNodeAdapter:
             if self.context.streaming_cache:
                 sequence = await self.context.streaming_cache.incr_seq(self.node.parent)
                 metadata = {
-                    "type": "container-child-metadata-updated",
+                    "type": EventType.container_child_metadata_updated,
                     "key": self.node.key,
                     "sequence": sequence,
                     "timestamp": datetime.now().isoformat(),
@@ -1784,8 +1784,7 @@ def key_present(query, tree):
     else:
         keys = query.key.split(".")
         condition = (
-            orm.Node.metadata_.op("#>")(sql_cast(keys, ARRAY(TEXT)))
-            != None  # noqa: E711
+            orm.Node.metadata_.op("#>")(sql_cast(keys, ARRAY(TEXT))) != None  # noqa: E711
         )
     condition = condition if getattr(query, "exists", True) else not_(condition)
     return tree.new_variation(conditions=tree.conditions + [condition])
