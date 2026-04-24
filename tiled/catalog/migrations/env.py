@@ -16,10 +16,21 @@ config = context.config
 # fileConfig(config.config_file_name)
 
 # add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+# for 'autogenerate' support.
+# When running make_migration.py the script injects Base.metadata via
+# config.attributes["target_metadata"]; during normal upgrade/downgrade this
+# stays None and is not used.
+target_metadata = config.attributes.get("target_metadata", None)
+
+# SQLite creates shadow tables for FTS5 virtual tables (e.g. metadata_fts5_data,
+# metadata_fts5_idx, ...). Exclude them so autogenerate doesn't try to manage them.
+_FTS5_PREFIXES = ("metadata_fts5_",)
+
+
+def _include_object(obj, name, type_, reflected, compare_to):
+    if type_ == "table" and any(name.startswith(p) for p in _FTS5_PREFIXES):
+        return False
+    return True
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -45,6 +56,7 @@ def run_migrations_offline():
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=_include_object,
     )
 
     with context.begin_transaction():
@@ -52,7 +64,11 @@ def run_migrations_offline():
 
 
 def do_run_migrations(connection):
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=_include_object,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
