@@ -18,6 +18,11 @@ API_KEY_QUERY_PARAMETER = "api_key"
 CSRF_COOKIE_NAME = "tiled_csrf"
 
 
+def normalize_root_path(root_path: Optional[str]) -> str:
+    """Coerce a root_path to "" or a prefix without a trailing slash."""
+    return (root_path or "").rstrip("/")
+
+
 @contextlib.contextmanager
 def record_timing(metrics: dict[str, Any], key: str) -> Generator[None]:
     """

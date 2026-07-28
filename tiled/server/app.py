@@ -14,6 +14,7 @@ from textwrap import dedent
 from typing import Any, Optional, Union
 
 import anyio
+import jinja2
 import packaging.version
 import yaml
 from asgi_correlation_id import CorrelationIdMiddleware, correlation_id
@@ -24,6 +25,8 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from jinja2.meta import find_undeclared_variables
+from jinja2.utils import htmlsafe_json_dumps
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import FileResponse
 from starlette.status import (
@@ -87,6 +90,52 @@ logger.addHandler(handler)
 
 # This is used to pass the currently-authenticated principal into the logger.
 current_principal = contextvars.ContextVar("current_principal")
+
+
+def _normalize_root_path(root_path: Optional[str]) -> str:
+    return (root_path or "").rstrip("/")
+
+
+# Variables that web-frontend's build injects into index.html. An index.html
+# that declares none of them is not ours and is served without this replacement.
+_UI_TEMPLATE_VARIABLES = frozenset({"tiled_runtime_base", "tiled_runtime_config"})
+_UI_JINJA_ENV = jinja2.Environment(autoescape=True, undefined=jinja2.StrictUndefined)
+
+
+def _compile_ui_template(index_html: bytes) -> Optional[jinja2.Template]:
+    source = index_html.decode("utf-8")
+    try:
+        parsed = _UI_JINJA_ENV.parse(source)
+    except jinja2.TemplateSyntaxError:
+        return None
+    declared = find_undeclared_variables(parsed) & _UI_TEMPLATE_VARIABLES
+    if not declared:
+        return None
+    if missing := _UI_TEMPLATE_VARIABLES - declared:
+        raise RuntimeError(
+            f"{Path(SHARE_TILED_PATH, 'ui', 'index.html')} declares "
+            f"{sorted(declared)} but not {sorted(missing)}. The web-frontend "
+            f"build and tiled.server.app have drifted out of sync."
+        )
+    return _UI_JINJA_ENV.from_string(source)
+
+
+def _render_ui_index(
+    index_html: bytes,
+    template: Optional[jinja2.Template],
+    root_path: Optional[str],
+) -> str:
+    if template is None:
+        return index_html.decode("utf-8")
+    root_path = _normalize_root_path(root_path)
+    return template.render(
+        tiled_runtime_base=f"{root_path}/ui/",
+        # Escapes <, >, & so the payload cannot break out of its <script>
+        # element, where the HTML parser would not decode ordinary entities.
+        tiled_runtime_config=htmlsafe_json_dumps(
+            {"root_path": root_path, "api_url": f"{root_path}/api/v1"}
+        ),
+    )
 
 
 def custom_openapi(app):
@@ -266,6 +315,20 @@ def build_app(
     if SHARE_TILED_PATH:
         # If the distribution includes static assets, serve UI routes.
 
+        configured_root_path: str = _normalize_root_path(
+            server_settings.get("root_path", "")
+        )
+        index_html_path = Path(SHARE_TILED_PATH, "ui", "index.html")
+        index_html: Optional[bytes] = (
+            index_html_path.read_bytes() if index_html_path.is_file() else None
+        )
+        ui_template = None if index_html is None else _compile_ui_template(index_html)
+
+        def request_root_path(request: Request) -> str:
+            return _normalize_root_path(
+                request.scope.get("root_path") or configured_root_path
+            )
+
         @app.get("/favicon.ico", include_in_schema=False)
         async def favicon():
             icon_path = Path(SHARE_TILED_PATH, "ui", "tiled-icon.ico")
@@ -275,15 +338,23 @@ def build_app(
 
         @app.get("/ui/{path:path}")
         async def ui(
+            request: Request,
             path,
             _=Depends(move_api_key),
         ):
-            response = await lookup_file(path)
+            response = await lookup_file(request, path)
             return response
 
-        async def lookup_file(path, try_app=True):
+        async def lookup_file(request: Request, path, try_app=True):
             if not path:
                 path = "index.html"
+            if path == "index.html" and index_html is not None:
+                return Response(
+                    content=_render_ui_index(
+                        index_html, ui_template, request_root_path(request)
+                    ),
+                    media_type="text/html",
+                )
             full_path = Path(SHARE_TILED_PATH, "ui", path)
             try:
                 stat_result = await anyio.to_thread.run_sync(os.stat, full_path)
@@ -294,7 +365,7 @@ def build_app(
                 # such as /ui//metadata/a/b/c.
                 # Serve index.html and let the client-side application sort it out.
                 if try_app:
-                    response = await lookup_file("index.html", try_app=False)
+                    response = await lookup_file(request, "index.html", try_app=False)
                     return response
                 raise HTTPException(status_code=HTTP_404_NOT_FOUND)
             except OSError:
@@ -341,12 +412,15 @@ def build_app(
             # comments. But they are served as JSON because that is easy to deal with
             # on the client side.
             ui_settings = yaml.safe_load(Path(TILED_UI_SETTINGS).read_text())
-            if root_path := server_settings.get("root_path", ""):
-                ui_settings["api_url"] = f"{root_path}{ui_settings['api_url']}"
 
             @app.get("/tiled-ui-settings")
-            async def tiled_ui_settings():
-                return ui_settings
+            async def tiled_ui_settings(request: Request):
+                settings = dict(ui_settings)
+                root_path = request_root_path(request)
+                api_url = settings["api_url"]
+                if root_path and api_url.startswith("/"):
+                    settings["api_url"] = f"{root_path}{api_url}"
+                return settings
 
     @app.exception_handler(Conflicts)
     async def conflicts_exception_handler(request: Request, exc: Conflicts):
