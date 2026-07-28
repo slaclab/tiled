@@ -255,6 +255,32 @@ properties:
         return UserSessionState(verified_body["sub"], {})
 
 
+class DexUsernameOIDCAuthenticator(OIDCAuthenticator):
+    """Use a human-readable claim as the identity id instead of the opaque `sub`.
+
+    Dex's `sub` is an opaque base64 blob. SLAC's Dex puts the account name in
+    `name`; other deployments may use `preferred_username`.
+    """
+
+    # Dex only emits `name`/`preferred_username` when `profile` is requested.
+    extra_scopes = ["profile"]
+
+    def __init__(self, *args: Any, username_claim: str = "name", **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.username_claim = username_claim
+
+    def decode_token(
+        self, id_token: str, access_token: Optional[str] = None
+    ) -> dict[str, Any]:
+        claims = super().decode_token(id_token, access_token)
+        username = claims.get(self.username_claim)
+        if not username:
+            # Fail closed: authenticate() turns JWTError into a rejected login.
+            raise JWTError(f"Token has no {self.username_claim!r} claim")
+        claims["sub"] = username
+        return claims
+
+
 class ProxiedOIDCAuthenticator(OIDCAuthenticator):
     configuration_schema = """
 $schema": http://json-schema.org/draft-07/schema#
