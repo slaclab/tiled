@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useContext, useState } from "react";
 import AppBar from "@mui/material/AppBar";
 import Button from "@mui/material/Button";
 import Container from "@mui/material/Container";
@@ -11,18 +11,21 @@ import Box from "@mui/material/Box";
 import { useAuth } from "../../auth/auth-context";
 import { tokenManager } from "../../auth/token-manager";
 import { axiosInstance } from "../../client";
+import { SettingsContext } from "../../context/settings";
+import { uiBasePath } from "../../settings";
 
 const TiledAppBar = () => {
   const { isAuthenticated, identity, authRequired, onLogout } = useAuth();
   const navigate = useNavigate();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const { api_url } = useContext(SettingsContext);
 
   const handleLogout = async () => {
     setAnchorEl(null);
     const refreshToken = tokenManager.getRefreshToken();
     if (refreshToken) {
       try {
-        await axiosInstance.post("/api/v1/auth/session/revoke", {
+        await axiosInstance.post(`${api_url}/auth/session/revoke`, {
           refresh_token: refreshToken,
         });
       } catch {
@@ -51,7 +54,7 @@ const TiledAppBar = () => {
             }}
           >
             <img
-              src={`${import.meta.env.BASE_URL}tiled-logo.svg`}
+              src={`${uiBasePath}/tiled-logo.svg`}
               alt="Tiled logo"
               style={{ height: 28, marginRight: 8 }}
             />

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/auth-context";
+import { uiBasePath } from "../settings";
 
 /**
  * OAuth callback page. Captures tokens from query params
@@ -29,7 +30,7 @@ export default function AuthCallback() {
         try {
           const url = new URL(decodeURIComponent(state));
           // Strip the router basename to avoid double-prefix (e.g. /ui/ui/browse/)
-          const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+          const base = uiBasePath;
           const path = url.pathname.startsWith(base)
             ? url.pathname.slice(base.length) || "/"
             : url.pathname;
