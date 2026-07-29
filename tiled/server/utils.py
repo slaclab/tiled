@@ -50,6 +50,16 @@ def get_base_url(request: Request) -> str:
     return f"{get_root_url(request)}/api/v1"
 
 
+def get_current_url(request: Request) -> str:
+    """
+    Externally-visible URL of this request, without query params.
+    Both ``get_root_url`` and ``request.url.path`` include ``root_path``.
+    """
+    root_path = request.scope.get("root_path", "").rstrip("/")
+    path = request.url.path.removeprefix(root_path)
+    return f"{get_root_url(request)}{path}"
+
+
 def get_zarr_url(request, version: Literal["v2", "v3"] = "v2"):
     """
     Base URL for the Zarr API
