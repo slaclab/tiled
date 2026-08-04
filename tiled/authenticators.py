@@ -138,6 +138,13 @@ properties:
     type: string
   redirect_on_failure:
     type: string
+  request_offline_access:
+    type: boolean
+    description: |
+      Whether to request the 'offline_access' scope (for refresh tokens).
+      Some providers (e.g. ORCID public API clients) reject this scope
+      with "one of the provided scopes is not allowed for this member".
+      Set to false to omit it.
 """
 
     def __init__(
@@ -150,6 +157,7 @@ properties:
         redirect_on_success: Optional[str] = None,
         redirect_on_failure: Optional[str] = None,
         user_id_claim: str = "sub",
+        request_offline_access: bool = True,
     ):
         self._audience = audience
         self._client_id = client_id
@@ -159,6 +167,7 @@ properties:
         self.redirect_on_success = redirect_on_success
         self.redirect_on_failure = redirect_on_failure
         self.user_id_claim = user_id_claim
+        self.request_offline_access = request_offline_access
 
     @functools.cached_property
     def _config_from_oidc_url(self) -> dict[str, Any]:
