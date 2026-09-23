@@ -2807,6 +2807,37 @@ def get_router(
         await entry.delete_revision(number)
         return json_or_msgpack(request, None)
 
+    @router.get("/size/{path:path}")
+    async def get_size(
+        request: Request,
+        path: str,
+        principal: Optional[Principal] = Depends(get_current_principal),
+        root_tree=Depends(get_root_tree),
+        session_state: dict = Depends(get_session_state),
+        authn_access_tags: Optional[AccessTags] = Depends(get_current_access_tags),
+        authn_scopes: Scopes = Depends(get_current_scopes),
+        _=Security(check_scopes, scopes=["read:metadata"]),
+    ):
+        entry = await get_entry(
+            path,
+            ["read:metadata"],
+            principal,
+            authn_access_tags,
+            authn_scopes,
+            root_tree,
+            session_state,
+            request.state.metrics,
+            None,
+            getattr(request.app.state, "access_policy", None),
+        )
+        if not hasattr(entry, "subtree_size"):
+            raise HTTPException(
+                status_code=HTTP_405_METHOD_NOT_ALLOWED,
+                detail="This node does not support size aggregation.",
+            )
+
+        return json_or_msgpack(request, await entry.subtree_size())
+
     @router.get("/asset/bytes/{path:path}")
     async def get_asset(
         request: Request,

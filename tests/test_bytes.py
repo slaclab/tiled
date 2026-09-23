@@ -571,3 +571,27 @@ def test_raw_export_handles_missing_content_length(http_client, tmp_path):
         repr(http_client["big"].include_data_sources())
         == f"<BytesClient {expected_size} across 1 asset>"
     )
+
+
+def test_subtree_size(http_client, tmp_path):
+    "Sum asset sizes under a node; shared assets count once."
+    run = http_client.create_container("run")
+    sub = run.create_container("sub")
+    other = http_client.create_container("other")
+
+    # run/a and run/sub/a share one file, so one asset.
+    _register_bytes_node(run, tmp_path, b"x" * 10, key="a")
+    _register_bytes_node(sub, tmp_path, b"x" * 10, key="a")
+    _register_bytes_node(run, tmp_path, b"x" * 5, key="b")
+    _register_bytes_node(run, tmp_path, b"xyz", key="unsized", size=None)
+    _register_bytes_node(other, tmp_path, b"x" * 1000, key="outside")
+
+    assert run.subtree_size() == {"bytes": 15, "assets": 3, "unknown_size": 1}
+    assert run["b"].subtree_size() == {"bytes": 5, "assets": 1, "unknown_size": 0}
+    assert http_client.subtree_size() == {
+        "bytes": 1015,
+        "assets": 4,
+        "unknown_size": 1,
+    }
+    empty = http_client.create_container("empty")
+    assert empty.subtree_size() == {"bytes": 0, "assets": 0, "unknown_size": 0}

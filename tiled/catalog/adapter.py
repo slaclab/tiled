@@ -1453,6 +1453,36 @@ class CatalogNodeAdapter:
                 ).scalar_one()
         return revisions, total
 
+    async def subtree_size(self):
+        """Sum asset sizes over this node and its descendants.
+
+        Assets shared by several nodes count once. Assets with unknown
+        size are counted separately, so a partial total is visible.
+        """
+        # Distinct assets referenced by any data source in the subtree.
+        subtree_assets = (
+            select(orm.DataSourceAssetAssociation.asset_id)
+            .join(
+                orm.DataSource,
+                orm.DataSource.id == orm.DataSourceAssetAssociation.data_source_id,
+            )
+            .join(
+                orm.NodesClosure,
+                orm.NodesClosure.descendant == orm.DataSource.node_id,
+            )
+            .where(orm.NodesClosure.ancestor == self.node.id)
+        )
+        statement = select(
+            func.coalesce(func.sum(orm.Asset.size), 0),
+            func.count(orm.Asset.id),
+            func.count(orm.Asset.size),
+        ).where(orm.Asset.id.in_(subtree_assets))
+
+        async with self.context.session() as db:
+            nbytes, assets, sized = (await db.execute(statement)).one()
+
+        return {"bytes": nbytes, "assets": assets, "unknown_size": assets - sized}
+
     async def delete(self, recursive=False, external_only=True):
         """Delete the Node, its descendants, and associated DataSources and Assets
 

@@ -932,6 +932,13 @@ class BaseClient:
 
         return self._metadata_revisions
 
+    def subtree_size(self) -> dict:
+        "Total asset bytes under this node, e.g. {'bytes': 10, 'assets': 2, 'unknown_size': 0}."
+        link = self.item["links"]["self"].replace("/metadata", "/size", 1)
+        for attempt in retry_context():
+            with attempt:
+                return handle_error(self.context.http_client.get(link)).json()
+
     def delete(self, recursive: bool = False, external_only: bool = True) -> None:
         """Delete the node and its contents, if any.
 
