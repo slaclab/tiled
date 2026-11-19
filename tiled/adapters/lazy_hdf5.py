@@ -17,13 +17,16 @@ Dispatched via `adapters_by_mimetype` on the private mimetype
 """
 
 import copy
-from typing import Any, List, Optional, Tuple, Union
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
 
 import h5py
 import numpy
 from numpy.typing import NDArray
 
 from tiled.adapters.core import Adapter
+from tiled.adapters.hdf5 import ReferenceGuard
 from tiled.catalog.orm import Node
 from tiled.ndslice import NDBlock, NDSlice
 from tiled.structures.array import ArrayStructure
@@ -43,20 +46,24 @@ class LazyHDF5ArrayAdapter(Adapter[ArrayStructure]):
     """
 
     structure_family = StructureFamily.array
+    # The catalog passes its readable storage as `readable_directories`.
+    accepts_readable_directories = True
 
     def __init__(
         self,
-        file_path: str,
+        file_path: str | Path,
         dataset_path: str,
-        base_index: Optional[int],
+        base_index: int | None,
         structure: ArrayStructure,
         *,
-        metadata: Optional[JSON] = None,
-        specs: Optional[List[Spec]] = None,
+        metadata: JSON | None = None,
+        specs: list[Spec] | None = None,
+        readable_directories: Sequence[str | Path] | None = None,
     ) -> None:
         self._file_path = file_path
         self._dataset_path = dataset_path
         self._base_index = base_index
+        self._guard = ReferenceGuard(file_path, readable_directories)
         super().__init__(structure, metadata=metadata, specs=specs)
 
     @classmethod
@@ -65,8 +72,9 @@ class LazyHDF5ArrayAdapter(Adapter[ArrayStructure]):
         data_source: DataSource[ArrayStructure],
         node: Node,
         /,
-        dataset: Optional[str] = None,
-        slice: Optional[Union[str, int]] = None,
+        dataset: str | None = None,
+        slice: str | int | None = None,
+        readable_directories: Sequence[str | Path] | None = None,
         **_ignored: Any,
     ) -> "LazyHDF5ArrayAdapter":
         """Build adapter from a catalog row.
@@ -87,7 +95,7 @@ class LazyHDF5ArrayAdapter(Adapter[ArrayStructure]):
                 "(the HDF5 path of the source dataset)."
             )
 
-        base_index: Optional[int]
+        base_index: int | None
         if slice is None or slice == "":
             base_index = None
         elif isinstance(slice, str):
@@ -98,14 +106,16 @@ class LazyHDF5ArrayAdapter(Adapter[ArrayStructure]):
         # Validate on-disk shape/dtype against the registered structure
         # (matches stock HDF5 adapter behavior; saves debugging time when
         # catalog goes stale).
+        # Refuse links, virtual sources and external raw data that lead out
+        # of readable storage (BrokenLink -> HTTP 410), before reading.
+        guard = ReferenceGuard(file_path, readable_directories)
         with h5py.File(file_path, "r", locking=False) as f:
             ds = f[dataset]
+            guard.check(ds)
             full_shape = tuple(ds.shape)
             ds_dtype = ds.dtype
 
-        expected_shape = (
-            full_shape[1:] if base_index is not None else full_shape
-        )
+        expected_shape = full_shape[1:] if base_index is not None else full_shape
         registered_shape = tuple(data_source.structure.shape)
         if expected_shape != registered_shape:
             raise ValueError(
@@ -126,11 +136,14 @@ class LazyHDF5ArrayAdapter(Adapter[ArrayStructure]):
             data_source.structure,
             metadata=copy.deepcopy(node.metadata_),
             specs=node.specs,
+            readable_directories=readable_directories,
         )
 
-    def _open_and_select(self) -> Tuple[h5py.File, h5py.Dataset]:
+    def _open_and_select(self) -> tuple[h5py.File, h5py.Dataset]:
         f = h5py.File(self._file_path, "r", locking=False)
-        return f, f[self._dataset_path]
+        ds = f[self._dataset_path]
+        self._guard.check(ds)
+        return f, ds
 
     def read(
         self,
@@ -143,6 +156,7 @@ class LazyHDF5ArrayAdapter(Adapter[ArrayStructure]):
         """
         with h5py.File(self._file_path, "r", locking=False) as f:
             ds = f[self._dataset_path]
+            self._guard.check(ds)
             if self._base_index is not None:
                 # h5py reads exactly the bytes of the one chunk at base_index.
                 row = ds[self._base_index]
@@ -160,6 +174,7 @@ class LazyHDF5ArrayAdapter(Adapter[ArrayStructure]):
         block_slice = block.slice_from_chunks(self._structure.chunks)
         with h5py.File(self._file_path, "r", locking=False) as f:
             ds = f[self._dataset_path]
+            self._guard.check(ds)
             if self._base_index is not None:
                 row = ds[self._base_index]
                 arr = row[tuple(block_slice)]
